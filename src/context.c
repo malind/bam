@@ -26,7 +26,9 @@ struct CONTEXT *context_get_pointer(lua_State *L)
 	/* HACK: we store the context pointer as the user data to
 		to the allocator for fast access to it */
 	void *context;
-	lua_getallocf(L, &context);
+	lua_getfield(L, LUA_REGISTRYINDEX, "context");
+	context = lua_topointer(L, -1);
+	lua_pop(L, 1);
 	return (struct CONTEXT*)context;
 }
 

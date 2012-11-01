@@ -305,7 +305,7 @@ static void lua_vm_trace_hook(lua_State *L, lua_Debug *ar)
 	if(ar->name)
 		printf("%s %s %d\n", ar->name, ar->source, ar->currentline);
 }
-
+/*
 static void *lua_alloctor_malloc(void *ud, void *ptr, size_t osize, size_t nsize)
 {
 	if (nsize == 0)
@@ -315,8 +315,7 @@ static void *lua_alloctor_malloc(void *ud, void *ptr, size_t osize, size_t nsize
 	}
 	
 	return realloc(ptr, nsize);
-}
-
+}*/
 
 /* *** */
 int register_lua_globals(struct CONTEXT *context)
@@ -686,7 +685,10 @@ static int bam(const char *scriptfile, const char **targets, int num_targets)
 	/* create lua context */
 	/* HACK: Store the context pointer as the userdata pointer to the allocator to make
 		sure that we have fast access to it. This makes the context_get_pointer call very fast */
-	context.lua = lua_newstate(lua_alloctor_malloc, &context);
+	/*context.lua = lua_newstate(lua_alloctor_malloc, &context);*/
+	context.lua = luaL_newstate();
+	lua_pushlightuserdata(context.lua, &context);
+	lua_setfield(context.lua, LUA_REGISTRYINDEX, "context");
 
 	/* install panic function */
 	lua_atpanic(context.lua, lf_panicfunc);
