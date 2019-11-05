@@ -666,52 +666,67 @@ static const char *decorate_header(unsigned id, const char *name, const char *li
 }
 
 /* dumps all nodes to the stdout */
-static void print_node(struct NODE *node, const char *label, int html)
+static void print_node(FILE* outputfile, struct NODE *node, const char *label, int html)
 {
 	struct NODELINK *link;
-	printf("%08x %s %s %s\n", (unsigned)node->timestamp, dirtyflags_str(node->dirty), label, decorate_header(node->id, node->filename, "n", html));
+	fprintf(outputfile, "%08x %s %s %s\n", (unsigned)node->timestamp, dirtyflags_str(node->dirty), label, decorate_header(node->id, node->filename, "n", html));
 	for(link = node->firstdep; link; link = link->next)
-		printf("%08x %s    DEPEND %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
+		fprintf(outputfile, "%08x %s    DEPEND %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
 	for(link = node->firstparent; link; link = link->next)
-		printf("%08x %s    PARENT %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
+		fprintf(outputfile, "%08x %s    PARENT %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
 	for(link = node->constraint_shared; link; link = link->next)
-		printf("%08x %s    SHARED %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
+		fprintf(outputfile, "%08x %s    SHARED %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
 	for(link = node->constraint_exclusive; link; link = link->next)
-		printf("%08x %s    EXCLUS %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
+		fprintf(outputfile, "%08x %s    EXCLUS %s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
 }
 
-void node_debug_dump(struct GRAPH *graph, int html)
+void node_debug_dump(struct GRAPH *graph, int html, const char* output_filename)
 {
 	struct JOB *job = graph->firstjob;
 	struct NODE *node = graph->first;
 	struct NODELINK *link;
 	struct STRINGLINK *strlink;
+	FILE* outputfile = NULL;
+
+	if(output_filename != NULL)
+	{
+		outputfile = fopen(output_filename, "w+");
+		if(outputfile == NULL)
+		{
+			printf("%s: error opening '%s' for node debug output\n", session.name, output_filename);
+			return;
+		}
+	}
+	else
+	{
+		outputfile = stdout;
+	}
 
 	if(html)
 	{
-		printf("<html><body><pre>\n");
-		printf("%s", dirtyflags_help);
-		printf("\n");
+		fprintf(outputfile, "<html><body><pre>\n");
+		fprintf(outputfile, "%s", dirtyflags_help);
+		fprintf(outputfile, "\n");
 	}
 
 	for(;job;job = job->next)
 	{
-		printf("JOB %s\n", decorate_header(job->id, job->label, "j", html));
-		printf("CMD %s\n", job->cmdline);
+		fprintf(outputfile, "JOB %s\n", decorate_header(job->id, job->label, "j", html));
+		fprintf(outputfile, "CMD %s\n", job->cmdline);
 		
 		for(link = job->firstoutput; link; link = link->next)
-			print_node(link->node, "OUTPUT", html);
+			fprint_node(outputfile, link->node, "OUTPUT", html);
 
 		for(link = job->firstjobdep; link; link = link->next)
-			printf("%08x %s JOBDEP %-30s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
+			fprintf(outputfile, "%08x %s JOBDEP %-30s\n", (unsigned)link->node->timestamp, dirtyflags_str(link->node->dirty), decorate_link(link->node->id, link->node->filename, "n", html));
 
 		for(strlink = job->firstclean; strlink; strlink = strlink->next)
-			printf("%8s %s CLEAN  %-30s\n", "", dirtyflags_str_empty, strlink->str);
+			fprintf(outputfile, "%8s %s CLEAN  %-30s\n", "", dirtyflags_str_empty, strlink->str);
 
 		for(strlink = job->firstsideeffect; strlink; strlink = strlink->next)
-			printf("%8s %s SIDE  %-30s\n", "", dirtyflags_str_empty, strlink->str);
+			fprintf(outputfile, "%8s %s SIDE  %-30s\n", "", dirtyflags_str_empty, strlink->str);
 
-		printf("\n");
+		fprintf(outputfile, "\n");
 	}
 
 
@@ -721,12 +736,12 @@ void node_debug_dump(struct GRAPH *graph, int html)
 		if(node->job->cmdline)
 			continue;
 
-		print_node(node, "NODE", html);
-		printf("\n");
+		print_node(outputfile, node, "NODE", html);
+		fprintf(outputfile, "\n");
 	}
 
 	if(html)
-		printf("</pre></body></html>\n");
+		fprintf(outputfile, "</pre></body></html>\n");
 	else
-		printf("%s", dirtyflags_help);
+		fprintf(outputfile, "%s", dirtyflags_help);
 }

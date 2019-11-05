@@ -69,6 +69,7 @@ static int option_dependent = 0;
 static int option_abort_on_error = 0;
 static int option_debug_nodes = 0;
 static int option_debug_nodes_html = 0;
+static const char* option_debug_nodes_file = NULL;
 static int option_debug_joblist = 0;
 static int option_debug_dumpinternal = 0;
 static int option_debug_nointernal = 0;
@@ -258,6 +259,11 @@ static struct OPTION options[] = {
 		for easier browsing.
 	@END*/
 	{OF_DEBUG, 0, &option_debug_nodes_html	, "--debug-nodes-html", "as --debug-nodes but in html format"},
+
+	/*@OPTION Debug: Target file for Dump Nodes (--debug-nodes-file FILENAME)
+		Target file for Dump Nodes and Dump Nodes in HMTL (instead of stdout)
+	@END*/
+	{OF_DEBUG, &option_debug_nodes_file, 0, "--debug-nodes-file", "file target for --debug-nodes and --debug-nodes-html"},
 
 	/*@OPTION Debug: Dump Joblist ( --debug-joblist )
 	@END*/
@@ -815,9 +821,9 @@ static int bam(const char *scriptfile, const char **targets, int num_targets)
 		if(!build_error)
 		{
 			if(option_debug_nodes) /* debug dump all nodes detailed */
-				node_debug_dump(context.graph, 0);
+								node_debug_dump(context.graph, 0, option_debug_nodes_file);
 			else if(option_debug_nodes_html) /* debug dump all nodes detailed as html*/
-				node_debug_dump(context.graph, 1);
+								node_debug_dump(context.graph, 1, option_debug_nodes_file);
 			else if(option_debug_joblist) /* debug dumps the joblist */
 				context_dump_joblist(&context);
 			else if(option_dry)

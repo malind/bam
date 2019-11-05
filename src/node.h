@@ -277,6 +277,6 @@ int node_walk(
 void node_walk_revisit(struct NODEWALK *walk, struct NODE *node);
 
 /* node debug dump functions */
-void node_debug_dump(struct GRAPH *graph, int html);
+void node_debug_dump(struct GRAPH *graph, int html, const char* output_filename);
 
 #endif /* FILE_NODE_H */
