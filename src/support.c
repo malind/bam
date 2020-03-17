@@ -566,102 +566,173 @@ void file_touch(const char *filename)
 #endif
 }
 
-#ifdef BAM_FAMILY_WINDOWS
-static void passthru(FILE *fp)
-{
-	while(1)
-	{
-		char buffer[1024*4];
-		size_t num_bytes = fread(buffer, 1, sizeof(buffer), fp);
-		if(num_bytes <= 0)
-			break;
-		criticalsection_enter();
-		fwrite(buffer, 1, num_bytes, stdout);
-		criticalsection_leave();
-	}
-}
-#endif
+#if defined(BAM_FAMILY_WINDOWS)
 
-#if defined(BAM_FAMILY_WINDOWS) || defined(BAM_PLATFORM_CYGWIN)
-/* forward declaration */
-FILE *_popen(const char *, const char *);
-int _pclose(FILE *);
-#endif
+int run_command_win(const char *cmd, const char *filter){
 
-int run_command(const char *cmd, const char *filter)
-{
-	int ret;
-	
-#ifdef BAM_FAMILY_WINDOWS
 	/* windows has a buggy command line parser. I takes the first and
 	last '"' and removes them which causes problems in cases like this:
-	
+
 		"C:\t t\test.bat" 1 2 "3" 4 5
-		
+
 	Which will yeild:
 
 		C:\t t\test.bat" 1 2 "3 4 5
-		
-	The work around is to encase the command line with '"' that it can remove.
-	
-	*/
-	char buf[32*1024];
-	FILE *fp;
-	size_t len = strlen(cmd);
-	if(len > sizeof(buf)-3) /* 2 for '"' and 1 for '\0' */
-		return -1;
-	buf[0] = '"';
-	memcpy(buf+1, cmd, len);
-	buf[len+1] = '"';
-	buf[len+2] = 0;
-	
-	/* open the command line */
-	fp = _popen(buf, "r");
 
-	if(!fp)
+	The work around is to encase the command line with '"' that it can remove.
+
+	*/
+
+	/* 
+	CreateProcess todo:
+	priorities (via dwCreationFlags)
+	*/
+
+	char buf[32 * 1024];
+	size_t cmd_len=0;
+	const char* cmdexe=NULL;
+	SECURITY_ATTRIBUTES sa_attr;
+	STARTUPINFOA startup_info;
+	PROCESS_INFORMATION process_info;
+	HANDLE stdout_read_handle = NULL;
+	HANDLE stdout_write_handle = NULL;
+	BOOL create_res = FALSE;
+	BOOL done_reading = FALSE;
+	DWORD exitCode = 0;
+
+	cmd_len = strlen(cmd);
+	if(cmd_len > sizeof(buf) - (3 + 3)) /* 3 for "/c ", 2 for '"' and 1 for '\0' */
+	{ 
 		return -1;
-		
+	}
+	buf[0] = '/';
+	buf[1] = 'c';
+	buf[2] = ' ';
+	buf[3] = '"';
+	memcpy(buf + 4, cmd, cmd_len);
+	buf[cmd_len + 4] = '"';
+	buf[cmd_len + 5] = 0;
+
+	cmdexe = getenv("COMSPEC");
+	if(!cmdexe)
+	{
+		return -1;
+	}
+
+	/*	We have the critical section around the create process (but not the wait of course) due to
+		a quirk with handles and inheritance in windows. If we spawn an unrelated process before we
+		close our handle to the inheritable pipe here it will also inherit that and that means the
+		last one wont be closed before both sub processes exists, meaing we wait for both. The old
+		_popen version also locket internaly. I'll try to fix this with the ex versions of these 
+		interfaces, so we can do parallell spawn. */
+	
+	criticalsection_enter();
+
+	ZeroMemory(&sa_attr, sizeof(sa_attr));
+	sa_attr.nLength = sizeof(SECURITY_ATTRIBUTES);
+	sa_attr.bInheritHandle = TRUE;
+	sa_attr.lpSecurityDescriptor = NULL;	
+
+	if(!CreatePipe(&stdout_read_handle, &stdout_write_handle, &sa_attr, 0))
+	{
+		criticalsection_leave();
+		return -1;
+	}
+	
+	if(!SetHandleInformation(stdout_read_handle, HANDLE_FLAG_INHERIT, 0)) 
+	{
+		criticalsection_leave();
+		return -1;
+	}
+	
+	
+	ZeroMemory(&startup_info, sizeof(startup_info));
+	startup_info.cb = sizeof(startup_info);
+	
+	startup_info.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	startup_info.hStdOutput = stdout_write_handle;
+	startup_info.hStdInput = GetStdHandle(STD_INPUT_HANDLE); /* not sure we want to git childs std in, but I'm copying windows _popen behavior for now. */
+	startup_info.dwFlags |= STARTF_USESTDHANDLES;
+	
+	ZeroMemory(&process_info, sizeof(process_info));
+
+	create_res = CreateProcessA( cmdexe, buf, NULL, NULL, TRUE, 0, NULL, NULL, 
+		&startup_info, &process_info);
+
+	if(!create_res) 
+	{
+		CloseHandle(stdout_write_handle);
+		CloseHandle(stdout_read_handle);
+		criticalsection_leave();
+		return -1;
+	}
+	
+	CloseHandle(stdout_write_handle);	
+
+	/* now that this handle is closed we can release the critical section */
+	criticalsection_leave();
+
+	done_reading = FALSE;
 	if(filter && *filter == 'F')
 	{
 		/* first filter match */
 		char buffer[1024];
-		size_t total;
-		size_t matchlen;
-		size_t numread;
-		
+		DWORD total;
+		DWORD matchlen;
+		DWORD numread;
+		BOOL readsuccess;
+
 		/* skip first letter */
 		filter++;
 		matchlen = strlen(filter);
 		total = 0;
 
+		if(matchlen > sizeof(buffer))
+		{
+			fprintf(stderr, "filter %s to long, max is %d charcters\n", filter, sizeof(buffer) );
+			return -1;
+		}
+
 		while(1)
 		{
-			numread = fread(buffer+total, 1, matchlen-total, fp);
-			if(numread <= 0)
+			readsuccess = ReadFile(stdout_read_handle, buffer, matchlen - total, &numread, NULL);
+			if(!readsuccess || numread == 0)
 			{
 				/* done or error, flush and exit */
 				fwrite(buffer, 1, total, stdout);
+				done_reading = TRUE;
 				break;
 			}
-			
+
 			/* accumelate the bytes read */
 			total += numread;
-			
+
 			if(total >= matchlen)
 			{
 				/* check if it matched */
 				if(memcmp(buffer, filter, matchlen) == 0)
 				{
 					/* check for line ending */
-					char t = fgetc(fp);
-					if(t == '\r')
+					char t;
+					readsuccess = ReadFile(stdout_read_handle, &t, 1, &numread, NULL);
+					if(!readsuccess || numread == 0) 
+					{
+						done_reading = TRUE;
+					}
+					else if(t == '\r')
 					{
 						/* this can be CR or CR/LF */
-						t = fgetc(fp);
-						if(t != '\n')
+						readsuccess = ReadFile(stdout_read_handle, &t, 1, &numread, NULL);
+						if(!readsuccess || numread == 0)
+						{
+							done_reading = TRUE;
+						}
+						else if(t != '\n')
 						{
 							/* not a CR/LF */
+							criticalsection_enter();
 							fputc(t, stdout);
+							criticalsection_leave();
 						}
 					}
 					else if(t == '\n')
@@ -671,27 +742,74 @@ int run_command(const char *cmd, const char *filter)
 					else
 					{
 						/* no line ending */
+						criticalsection_enter();
 						fputc(t, stdout);
+						criticalsection_leave();
 					}
 				}
 				else
 				{
+					criticalsection_enter();
 					fwrite(buffer, 1, total, stdout);
+					criticalsection_leave();
 				}
-	
-				passthru(fp);
 				break;
 			}
-			
 		}
+	}
+	if(!done_reading)
+	{
+		char buffer[1024*4];
+		while(1)
+		{
+			DWORD read = 0;
+			BOOL success = ReadFile(stdout_read_handle, buffer, sizeof(buffer), &read, NULL);
+			if(!success || read == 0) 
+			{
+				break;
+			}
+			criticalsection_enter();
+			fwrite(buffer, 1, read, stdout);
+			criticalsection_leave();
+		}
+	}
+
+	WaitForSingleObject(process_info.hProcess, INFINITE);
+
+	if (!GetExitCodeProcess(process_info.hProcess, &exitCode))
+	{
+		exitCode = -1;
+	}
+
+	CloseHandle(process_info.hThread);
+	CloseHandle(process_info.hProcess);
+
+	CloseHandle(stdout_read_handle);
+
+	if(create_res)
+	{
+		return exitCode;
 	}
 	else
 	{
-		/* no filter */
-		passthru(fp);
+		return -1;
 	}
+}
+#endif
 
-	ret = _pclose(fp);
+
+#if defined(BAM_PLATFORM_CYGWIN)
+/* forward declaration */
+FILE* _popen(const char*, const char*);
+int _pclose(FILE*);
+#endif
+
+int run_command(const char *cmd, const char *filter)
+{
+	int ret;
+	
+#ifdef BAM_FAMILY_WINDOWS
+	ret = run_command_win(cmd, filter);
 #else
 	ret = system(cmd);
 	if(WIFSIGNALED(ret))
