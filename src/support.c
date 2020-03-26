@@ -592,12 +592,13 @@ int run_command_win(const char *cmd, const char *filter){
 	size_t cmd_len=0;
 	const char* cmdexe=NULL;
 	SECURITY_ATTRIBUTES sa_attr;
-	STARTUPINFOA startup_info;
+	STARTUPINFOEXA startup_info;
 	PROCESS_INFORMATION process_info;
 	HANDLE stdout_read_handle = NULL;
 	HANDLE stdout_write_handle = NULL;
 	BOOL create_res = FALSE;
 	BOOL done_reading = FALSE;
+	HANDLE process_inherit_handles[3] = { NULL, NULL, NULL };
 	DWORD exitCode = 0;
 
 	cmd_len = strlen(cmd);
@@ -619,15 +620,6 @@ int run_command_win(const char *cmd, const char *filter){
 		return -1;
 	}
 
-	/*	We have the critical section around the create process (but not the wait of course) due to
-		a quirk with handles and inheritance in windows. If we spawn an unrelated process before we
-		close our handle to the inheritable pipe here it will also inherit that and that means the
-		last one wont be closed before both sub processes exists, meaing we wait for both. The old
-		_popen version also locket internaly. I'll try to fix this with the ex versions of these 
-		interfaces, so we can do parallell spawn. */
-	
-	criticalsection_enter();
-
 	ZeroMemory(&sa_attr, sizeof(sa_attr));
 	sa_attr.nLength = sizeof(SECURITY_ATTRIBUTES);
 	sa_attr.bInheritHandle = TRUE;
@@ -635,42 +627,62 @@ int run_command_win(const char *cmd, const char *filter){
 
 	if(!CreatePipe(&stdout_read_handle, &stdout_write_handle, &sa_attr, 0))
 	{
-		criticalsection_leave();
 		return -1;
 	}
 	
 	if(!SetHandleInformation(stdout_read_handle, HANDLE_FLAG_INHERIT, 0)) 
 	{
-		criticalsection_leave();
 		return -1;
 	}
 	
 	
 	ZeroMemory(&startup_info, sizeof(startup_info));
-	startup_info.cb = sizeof(startup_info);
+	startup_info.StartupInfo.cb = sizeof(startup_info);
 	
-	startup_info.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-	startup_info.hStdOutput = stdout_write_handle;
-	startup_info.hStdInput = GetStdHandle(STD_INPUT_HANDLE); /* not sure we want to git childs std in, but I'm copying windows _popen behavior for now. */
-	startup_info.dwFlags |= STARTF_USESTDHANDLES;
+	startup_info.StartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	startup_info.StartupInfo.hStdOutput = stdout_write_handle;
+	startup_info.StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE); /* not sure we want to git childs std in, but I'm copying windows _popen behavior for now. */
+	startup_info.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+
+	PSIZE_T attrib_list_size = 0;
+
+	InitializeProcThreadAttributeList(NULL, 1, 0, &attrib_list_size);
+	LPPROC_THREAD_ATTRIBUTE_LIST attrib_list = (LPPROC_THREAD_ATTRIBUTE_LIST*)malloc(attrib_list_size);
+	if (!InitializeProcThreadAttributeList(attrib_list, 1, 0, &attrib_list_size))
+	{
+		free(attrib_list);
+		return -1;
+	}
+
+	/* explicitly list what handles should be inherited */
+	process_inherit_handles[0] = GetStdHandle(STD_ERROR_HANDLE);;
+	process_inherit_handles[1] = stdout_write_handle;
+	process_inherit_handles[2] = GetStdHandle(STD_INPUT_HANDLE);
+
+	if (!UpdateProcThreadAttribute(attrib_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, process_inherit_handles, sizeof(process_inherit_handles), NULL, NULL))
+	{
+		DeleteProcThreadAttributeList(attrib_list);
+		free(attrib_list);
+		return -1;
+	}
+
+	startup_info.lpAttributeList = attrib_list;
 	
 	ZeroMemory(&process_info, sizeof(process_info));
 
-	create_res = CreateProcessA( cmdexe, buf, NULL, NULL, TRUE, 0, NULL, NULL, 
+	create_res = CreateProcessA( cmdexe, buf, NULL, NULL, TRUE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
 		&startup_info, &process_info);
 
 	if(!create_res) 
 	{
 		CloseHandle(stdout_write_handle);
 		CloseHandle(stdout_read_handle);
-		criticalsection_leave();
+		DeleteProcThreadAttributeList(attrib_list);
+		free(attrib_list);
 		return -1;
 	}
 	
 	CloseHandle(stdout_write_handle);	
-
-	/* now that this handle is closed we can release the critical section */
-	criticalsection_leave();
 
 	done_reading = FALSE;
 	if(filter && *filter == 'F')
@@ -785,6 +797,8 @@ int run_command_win(const char *cmd, const char *filter){
 	CloseHandle(process_info.hProcess);
 
 	CloseHandle(stdout_read_handle);
+	DeleteProcThreadAttributeList(attrib_list);
+	free(attrib_list);
 
 	if(create_res)
 	{
