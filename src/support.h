@@ -51,7 +51,7 @@ void *threads_create(void (*threadfunc)(void *), void *u);
 void threads_join(void *thread);
 void threads_sleep(int milliseconds);
 void threads_yield();
-int threads_corecount();
+int threads_corecount(uint8_t* groups, int max_groups, int* num_groups_out);
 
 void criticalsection_enter();
 void criticalsection_leave();

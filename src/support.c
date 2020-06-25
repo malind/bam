@@ -265,13 +265,56 @@
 		Sleep(milliseconds);
 	}
 	
-	int threads_corecount()
+	int threads_corecount(uint8_t* groups, int max_groups, int* num_groups_out)
 	{
-		SYSTEM_INFO sysinfo;
-		GetSystemInfo(&sysinfo);
-		if(sysinfo.dwNumberOfProcessors >= 1)
-			return sysinfo.dwNumberOfProcessors;
-		return 1;
+		int num_threads = 0;
+		int num_groups = 0;
+		SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* pinfoBase = NULL;
+		SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* pinfoCurrent = NULL;
+		int struct_size = 0;		
+		int struct_offset = 0;		
+
+		memset(groups, 0, maxGroups * sizeof(uint8_t));
+		groups[0] = 1;
+
+		if (GetLogicalProcessorInformationEx(RelationGroup, NULL, &struct_size))
+		{
+			return 1;
+		}
+		if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+			return 1;
+		}
+
+		pinfoBase = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)malloc(struct_size);
+
+		if (!GetLogicalProcessorInformationEx(RelationGroup, pinfoBase, &struct_size))
+		{
+			free(pinfoBase);
+			return;
+		}
+
+		while (offset < cb)
+		{
+			pinfoCurrent = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(((char*)pinfoBase) + offset);
+			offset += pinfoCurrent->Size;
+
+			printf("[%d]: groups: %d\n", index, pinfoCurrent->Group.ActiveGroupCount);
+			
+			for (int group_index = 0; group_index < pinfoCurrent->Group.ActiveGroupCount; group_index++)
+			{
+				printf("    [%d]: n: %d mask %llx\n", group_index,  pinfoCurrent->Group.GroupInfo[group_index].ActiveProcessorCount, pinfoCurrent->Group.GroupInfo[group_index].ActiveProcessorMask);
+				if (num_groups> max_groups)
+				{
+					break;
+				}
+				groups[num_groups] = pinfoCurrent->Group.GroupInfo[group_index].ActiveProcessorCount;
+				num_groups += 1;
+				num_threads += pinfoCurrent->Group.GroupInfo[group_index].ActiveProcessorCount;
+			}
+			index += 1;
+		}
+		free(pinfoBase);
+		num_groups_out = num_groups;
 	}
 
 
@@ -416,8 +459,8 @@
 	{
 		usleep(milliseconds*1000);
 	}
-
-	int threads_corecount()
+	
+	int threads_corecount_internal()
 	{
 #ifdef BAM_PLATFORM_MACOSX
 		int nm[2] = {CTL_HW, HW_AVAILCPU};
@@ -449,7 +492,16 @@
 	    if(count >= 1)
 	    	return count;
 	    return 1;
-#endif
+#endif	
+	}
+	int threads_corecount(uint8_t* groups, int max_groups, int* num_groups_out) {
+		int num_threads = threads_corecount_internal();
+		if (max_groups > 0)
+		{
+			groups[0] = num_threads;
+			num_groups_out = 1;
+		}
+		return num_threads;
 	}
 
 	int64 time_get()

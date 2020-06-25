@@ -6,6 +6,7 @@ struct SESSION
 	const char *exe;
 	const char *name;
 	int threads;
+	uint8_t threadGroups[16];
 	int verbose;
 	int simpleoutput;
 	
